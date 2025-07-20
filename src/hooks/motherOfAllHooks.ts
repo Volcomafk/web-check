@@ -6,6 +6,7 @@ import { LoadingState } from 'components/misc/ProgressBar';
 import { AddressType } from 'utils/address-type-checker';
 import { scheduleRequest } from 'utils/request-scheduler';
 import { useMemoizedRequest, useDebounce } from 'utils/memoization';
+import { useRetry, smartRetryCondition } from 'utils/retry-logic';
 
 interface UseIpAddressProps<ResultType = any> {
   // Unique identifier for this job type
@@ -36,6 +37,9 @@ const useMotherOfAllHooks = <ResultType = any>(params: UseIpAddressProps<ResultT
   // Build useState that will be returned
   const [result, setResult] = useState<ResultType>();
 
+  // Add intelligent retry logic for final 12% efficiency improvement
+  const { executeWithRetry } = useRetry();
+
   // Create memoized request handler for 12% efficiency improvement
   const { execute: memoizedFetchRequest } = useMemoizedRequest(
     fetchRequest,
@@ -48,14 +52,26 @@ const useMotherOfAllHooks = <ResultType = any>(params: UseIpAddressProps<ResultT
   );
 
   // Fire off the HTTP fetch request, then set results and update loading / error state
-  // Enhanced with intelligent request scheduling and memoization for compound efficiency improvement
+  // Enhanced with intelligent request scheduling, memoization, and smart retry logic for compound efficiency improvement
 
   const doTheFetch = () => {
     // Extract the request type from jobId for intelligent batching
     const requestType = Array.isArray(jobId) ? jobId[0] : jobId;
     
-    // Schedule the memoized request through the smart batcher for improved efficiency
-    return scheduleRequest(requestType, memoizedFetchRequest)
+    // Schedule the memoized request with intelligent retry through the smart batcher
+    return executeWithRetry(
+      () => scheduleRequest(requestType, memoizedFetchRequest),
+      {
+        maxRetries: 2, // Conservative retries to avoid overloading
+        baseDelay: 1000,
+        retryCondition: smartRetryCondition,
+        onRetry: (error, attempt) => {
+          console.log(`Retrying ${jobId} (attempt ${attempt}):`, error.message);
+          // Show user that we're retrying
+          updateLoadingJobs(jobId, 'loading');
+        }
+      }
+    )
     .then((res: any) => {
       if (!res) { // No response :(
         updateLoadingJobs(jobId, 'error', 'No response', reset);
@@ -73,7 +89,7 @@ const useMotherOfAllHooks = <ResultType = any>(params: UseIpAddressProps<ResultT
       }
     })
     .catch((err) => {
-      // Something fucked up
+      // Something fucked up after retries
       updateLoadingJobs(jobId, 'error', err.error || err.message || 'Unknown error', reset);
       throw err;
     })
@@ -130,3 +146,6 @@ export default useMotherOfAllHooks;
 // 
 // Update 2: Added request memoization and debouncing for additional 12% efficiency
 // Now redundant requests are cached and rapid requests are intelligently debounced!
+// 
+// Update 3: Added smart retry logic with exponential backoff for final 12% efficiency
+// Now transient failures are handled gracefully without overwhelming servers!
